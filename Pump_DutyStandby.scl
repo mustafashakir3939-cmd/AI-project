@@ -1,0 +1,52 @@
+// Pump_DutyStandby: duty/standby changeover for two pumps (TIA Portal V19, SCL)
+//
+// Interface (create in the FB interface table):
+//   Input:  Demand, Reset, Fb_Run_1, Fb_Run_2, Ovl_1, Ovl_2 (Bool), Fb_Timeout (Time := T#5s)
+//   Output: Cmd_1, Cmd_2, Fail_1, Fail_2, All_Failed (Bool), Duty (Int := 1)
+//   Static: Hours_Sec_1, Hours_Sec_2 (DInt), Tick, Fb_Tmr_1, Fb_Tmr_2 (TON_TIME), Demand_Prev (Bool)
+
+// 1) One-second pulse (used to count run time)
+#Tick(IN := NOT #Tick.Q, PT := T#1s);
+
+// 2) Feedback timers: command given but no run feedback
+#Fb_Tmr_1(IN := #Cmd_1 AND NOT #Fb_Run_1, PT := #Fb_Timeout);
+#Fb_Tmr_2(IN := #Cmd_2 AND NOT #Fb_Run_2, PT := #Fb_Timeout);
+
+// 3) Latch faults
+IF #Ovl_1 OR #Fb_Tmr_1.Q THEN #Fail_1 := TRUE; END_IF;
+IF #Ovl_2 OR #Fb_Tmr_2.Q THEN #Fail_2 := TRUE; END_IF;
+
+IF #Reset THEN
+  IF NOT #Ovl_1 THEN #Fail_1 := FALSE; END_IF;
+  IF NOT #Ovl_2 THEN #Fail_2 := FALSE; END_IF;
+END_IF;
+
+#All_Failed := #Fail_1 AND #Fail_2;
+
+// 4) Select duty pump on a new demand (rising edge)
+IF #Demand AND NOT #Demand_Prev THEN
+  IF #Fail_1 THEN
+    #Duty := 2;
+  ELSIF #Fail_2 THEN
+    #Duty := 1;
+  ELSIF #Hours_Sec_1 <= #Hours_Sec_2 THEN
+    #Duty := 1;
+  ELSE
+    #Duty := 2;
+  END_IF;
+END_IF;
+#Demand_Prev := #Demand;
+
+// 5) Automatic changeover while running
+IF #Duty = 1 AND #Fail_1 AND NOT #Fail_2 THEN #Duty := 2; END_IF;
+IF #Duty = 2 AND #Fail_2 AND NOT #Fail_1 THEN #Duty := 1; END_IF;
+
+// 6) Pump commands
+#Cmd_1 := #Demand AND (#Duty = 1) AND NOT #Fail_1;
+#Cmd_2 := #Demand AND (#Duty = 2) AND NOT #Fail_2;
+
+// 7) Run-hours counter (based on actual run feedback)
+IF #Tick.Q THEN
+  IF #Fb_Run_1 THEN #Hours_Sec_1 += 1; END_IF;
+  IF #Fb_Run_2 THEN #Hours_Sec_2 += 1; END_IF;
+END_IF;
